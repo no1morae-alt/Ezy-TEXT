@@ -3637,7 +3637,7 @@ const SESSION_KEY = 'my-session-v1'; // 개인 저장소: 이 브라우저가 �
 const REMEMBER_KEY = 'remembered-login-v1'; // 개인 저장소: 로그인 화면에 미리 채워둘 아이디/패스워드
 let currentMember = null; // 현재 로그인한 회원 정보 (게시판 글쓰기 등에 사용)
 const ADMIN_PASSWORD = 'oiji2026'; // 관리자 비밀번호 (필요 시 이 값을 바꿔서 재배포하면 돼요)
-const HEARTBEAT_MS = 30000; // 30초마다 접속중 상태 갱신
+const HEARTBEAT_MS = 90000; // 90초마다 접속중 상태 갱신
 const ONLINE_THRESHOLD_MS = 2 * 60 * 1000; // 최근 2분 이내 접속이면 '접속중'으로 표시
 
 // 참고: 이 도구는 서버가 없는 정적 웹페이지라, 비밀번호는 완전한 암호학적 해시가 아닌
