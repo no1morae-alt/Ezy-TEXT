@@ -1,3 +1,4 @@
+// redeploy
 // Cloudflare Pages Function
 // 경로: /api/generate
 
