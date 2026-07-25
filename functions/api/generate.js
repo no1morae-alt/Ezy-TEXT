@@ -1,18 +1,11 @@
 // Cloudflare Pages Function
-// 경로: /api/generate  (✨ AI 생성 버튼이 이 엔드포인트를 호출합니다)
-//
-// 배포 전 준비할 것:
-// Cloudflare 대시보드 > Pages 프로젝트 > Settings > Environment variables 에서
-//   변수 이름: ANTHROPIC_API_KEY  (Encrypt 체크) → https://console.anthropic.com 에서 발급받은 키 입력
-//
-// 이 파일이 브라우저 대신 Anthropic API를 호출해서, API 키가 사용자 화면(자바스크립트)에
-// 노출되지 않도록 안전하게 감춰줍니다.
+// 경로: /api/generate
 
 export async function onRequestPost(context){
   const { request, env } = context;
 
-  if(!env.ANTHROPIC_API_KEY){
-    return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY가 설정되지 않았어요. Cloudflare Pages 환경변수를 확인해주세요.' }), {
+  if(!env.GEMINI_API_KEY){
+    return new Response(JSON.stringify({ error: 'GEMINI_API_KEY가 설정되지 않았어요. Cloudflare Pages 환경변수를 확인해주세요.' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
@@ -30,23 +23,39 @@ export async function onRequestPost(context){
   }
 
   try{
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+    const contents = body.messages.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    }));
+
+    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 500,
-        messages: body.messages
+        contents: contents
       })
     });
 
-    const data = await anthropicRes.json();
-    return new Response(JSON.stringify(data), {
-      status: anthropicRes.status,
+    const data = await geminiRes.json();
+
+    if (!geminiRes.ok) {
+      return new Response(JSON.stringify(data), {
+        status: geminiRes.status,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const formattedResponse = {
+      content: [
+        { type: 'text', text: generatedText }
+      ]
+    };
+
+    return new Response(JSON.stringify(formattedResponse), {
+      status: 200,
       headers: { 'Content-Type': 'application/json' }
     });
   }catch(err){
