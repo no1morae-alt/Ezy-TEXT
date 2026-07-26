@@ -1673,7 +1673,7 @@ function renderBasicInfoList(){
       ${!isDefault ? `<button class="btn secondary btn-small" data-set-default-basic-info="${entry.id}" type="button">기본으로 지정</button>` : ''}
       <button class="btn secondary btn-small" data-edit-basic-info="${entry.id}" type="button" style="border-radius:999px;">수정</button>
       ${isDefault ? `<button class="btn secondary btn-small" data-unset-default-basic-info="${entry.id}" type="button" style="border-radius:999px;border-color:var(--warn);color:var(--warn);">기본 해제</button>` : ''}
-      <button class="btn ghost" data-delete-basic-info="${entry.id}" type="button" style="border-radius:999px;border:1px solid #c94a3f;color:#c94a3f;">삭제</button>
+      <button class="btn secondary btn-small" data-delete-basic-info="${entry.id}" type="button" style="border-radius:999px;border:1px solid #c94a3f;color:#c94a3f;">삭제</button>
     `;
     container.appendChild(row);
   });
