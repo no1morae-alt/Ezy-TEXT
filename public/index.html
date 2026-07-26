@@ -1470,6 +1470,7 @@ function setGateVisible(visible){
     return id;
   }
   const deviceId = getDeviceId();
+  let currentMemberId = null;
 
   let bannerShown = false;
   function showStorageErrorBanner(message){
@@ -1488,7 +1489,7 @@ function setGateVisible(visible){
       res = await fetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({ action, deviceId }, params))
+        body: JSON.stringify(Object.assign({ action, deviceId, memberId: currentMemberId }, params))
       });
     }catch(networkErr){
       showStorageErrorBanner('/api/storage에 접속할 수 없어요 (네트워크 오류). Cloudflare Pages Functions가 배포됐는지 확인해주세요.');
@@ -1509,6 +1510,7 @@ function setGateVisible(visible){
   }
 
   window.storage = {
+    setMemberId(id){ currentMemberId = id || null; },
     async get(key, shared){
       const result = await callStorageApi('get', { key, shared: !!shared });
       if(result.value === null || result.value === undefined) return null;
@@ -3710,6 +3712,29 @@ function startHeartbeat(memberId){
   heartbeatTimer = setInterval(()=>beat(false), HEARTBEAT_MS);
 }
 
+// 로그인이 확인되면 이 기기(deviceId)가 아니라 회원 계정(memberId) 기준으로 개인 데이터를
+// 다시 불러와요 — 그래야 다른 기기에서 로그인해도 같은 데이터가 보여요.
+async function reloadPersonalDataForMember(){
+  await Promise.all([loadConfig(), loadOutreachRecords(), loadDocsRecords(), loadBasicInfoList()]);
+  await loadDrafts();
+}
+
+function resetPersonalDataToDefaults(){
+  config = JSON.parse(JSON.stringify(defaultConfig));
+  basicInfoList = [];
+  defaultBasicInfoId = null;
+  outreachRecords = [];
+  docsRecords = [];
+  composeDrafts = [];
+  docsDrafts = [];
+  renderAll();
+  renderBasicInfoList();
+  renderOutreachSelect();
+  renderComposeOutreachSelect();
+  renderDraftsList('compose');
+  renderDraftsList('docs');
+}
+
 async function checkSignupGate(){
   try{
     const res = await window.storage.get(SESSION_KEY, false);
@@ -3726,6 +3751,8 @@ async function checkSignupGate(){
         await saveMembers(members);
         startHeartbeat(member.id);
         currentMember = member;
+        window.storage.setMemberId(member.id);
+        await reloadPersonalDataForMember();
         return;
       }
       // session invalid (withdrawn or missing) - clear it and fall through to gate
@@ -3787,6 +3814,8 @@ document.getElementById('logoutLink').addEventListener('click', async (e)=>{
     await window.storage.delete(SESSION_KEY, false);
   }catch(err){ /* ignore */ }
   currentMember = null;
+  window.storage.setMemberId(null);
+  resetPersonalDataToDefaults();
   resetGateForm();
 });
 
@@ -4049,6 +4078,8 @@ document.getElementById('signupSubmitBtn').addEventListener('click', async ()=>{
     showLoggedInState(name);
     startHeartbeat(member.id);
     currentMember = member;
+    window.storage.setMemberId(member.id);
+    await reloadPersonalDataForMember();
   }catch(e){
     statusEl.textContent = '가입 처리에 실패했어요. 잠시 후 다시 시도해주세요.';
   }
@@ -4089,6 +4120,8 @@ async function performLogin(email, password){
     showLoggedInState(member.name);
     startHeartbeat(member.id);
     currentMember = member;
+    window.storage.setMemberId(member.id);
+    await reloadPersonalDataForMember();
   }catch(e){
     statusEl.textContent = '로그인에 실패했어요. 잠시 후 다시 시도해주세요.';
   }

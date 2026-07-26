@@ -10,8 +10,9 @@
 // - personal(shared=false): "personal:{deviceId}:{key}" 로 저장 (이 브라우저에만 귀속)
 // - shared(shared=true):    "shared:{key}" 로 저장 (모든 사용자가 공유)
 
-function buildKvKey(deviceId, key, shared){
+function buildKvKey(deviceId, key, shared, memberId){
   if(shared) return `shared:${key}`;
+  if(memberId) return `member:${memberId}:${key}`;
   return `personal:${deviceId}:${key}`;
 }
 
@@ -32,7 +33,7 @@ export async function onRequestPost(context){
     return new Response(JSON.stringify({ error: '잘못된 요청입니다.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
 
-  const { action, deviceId, key, value, shared, prefix } = body;
+  const { action, deviceId, key, value, shared, prefix, memberId } = body;
 
   if(!deviceId){
     return new Response(JSON.stringify({ error: 'deviceId가 필요합니다.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -41,30 +42,30 @@ export async function onRequestPost(context){
   try{
     if(action === 'get'){
       if(!key) return new Response(JSON.stringify({ error: 'key가 필요합니다.' }), { status: 400 });
-      const kvKey = buildKvKey(deviceId, key, shared);
+      const kvKey = buildKvKey(deviceId, key, shared, memberId);
       const raw = await env.STORAGE_KV.get(kvKey);
       return new Response(JSON.stringify({ value: raw === null ? null : raw }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     if(action === 'set'){
       if(!key) return new Response(JSON.stringify({ error: 'key가 필요합니다.' }), { status: 400 });
-      const kvKey = buildKvKey(deviceId, key, shared);
+      const kvKey = buildKvKey(deviceId, key, shared, memberId);
       await env.STORAGE_KV.put(kvKey, value);
       return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     if(action === 'delete'){
       if(!key) return new Response(JSON.stringify({ error: 'key가 필요합니다.' }), { status: 400 });
-      const kvKey = buildKvKey(deviceId, key, shared);
+      const kvKey = buildKvKey(deviceId, key, shared, memberId);
       const existing = await env.STORAGE_KV.get(kvKey);
       await env.STORAGE_KV.delete(kvKey);
       return new Response(JSON.stringify({ deleted: existing !== null }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     if(action === 'list'){
-      const scopedPrefix = shared ? `shared:${prefix || ''}` : `personal:${deviceId}:${prefix || ''}`;
+      const scopedPrefix = shared ? `shared:${prefix || ''}` : (memberId ? `member:${memberId}:${prefix || ''}` : `personal:${deviceId}:${prefix || ''}`);
       const listResult = await env.STORAGE_KV.list({ prefix: scopedPrefix, limit: 1000 });
-      const stripLen = shared ? 'shared:'.length : `personal:${deviceId}:`.length;
+      const stripLen = shared ? 'shared:'.length : (memberId ? `member:${memberId}:`.length : `personal:${deviceId}:`.length);
       const keys = listResult.keys.map(k => k.name.slice(stripLen));
       return new Response(JSON.stringify({ keys }), { headers: { 'Content-Type': 'application/json' } });
     }
