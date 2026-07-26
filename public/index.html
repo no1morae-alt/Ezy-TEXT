@@ -353,7 +353,11 @@
     </div>
 
     <div class="field-row">
-      <label>로그인 아이디 (이메일)</label>
+      <label>아이디 <span class="hint">(로그인에 사용 · 영문/숫자/밑줄 4~20자)</span></label>
+      <input type="text" id="myPageUsername" placeholder="예: honggildong">
+    </div>
+    <div class="field-row">
+      <label>이메일 <span class="hint">(계정 찾기용 · 변경 불가)</span></label>
       <input type="text" id="myPageEmail" disabled style="background:var(--cream);color:var(--ink-soft);">
     </div>
     <div class="field-row">
@@ -484,8 +488,8 @@
 
     <div id="gateLoginView">
       <div class="field-row">
-        <label>아이디(이메일)</label>
-        <input type="text" id="loginEmail" placeholder="예: name@example.com">
+        <label>아이디</label>
+        <input type="text" id="loginUsername" placeholder="가입 시 정한 아이디 (기존 회원은 이메일도 가능)">
       </div>
       <div class="field-row">
         <label>패스워드</label>
@@ -509,7 +513,7 @@
       <div id="forgotPasswordBox" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px;">
         <div id="forgotStep1">
           <div class="field-row">
-            <label>아이디(이메일)</label>
+            <label>이메일</label>
             <input type="text" id="forgotEmail" placeholder="예: name@example.com">
           </div>
           <div class="status" id="forgotStatus" style="margin-bottom:8px;"></div>
@@ -543,8 +547,12 @@
         <input type="text" id="signupName" placeholder="예: 홍길동">
       </div>
       <div class="field-row">
-        <label>이메일 (아이디)</label>
-        <input type="text" id="signupEmail" placeholder="예: name@example.com">
+        <label>아이디</label>
+        <input type="text" id="signupUsername" placeholder="영문/숫자/밑줄 4~20자 (로그인에 사용)">
+      </div>
+      <div class="field-row">
+        <label>이메일</label>
+        <input type="text" id="signupEmail" placeholder="예: name@example.com (계정 찾기용)">
       </div>
       <div class="field-row">
         <label>비밀번호</label>
@@ -1555,11 +1563,11 @@ function setGateVisible(visible){
       const result = await callStorageApi('membersGet', {});
       return result.members || [];
     },
-    async membersSignup(name, email, passwordHash){
-      return callStorageApi('membersSignup', { name, email, passwordHash });
+    async membersSignup(name, email, username, passwordHash){
+      return callStorageApi('membersSignup', { name, email, username, passwordHash });
     },
-    async membersLogin(email, passwordHash){
-      return callStorageApi('membersLogin', { email, passwordHash });
+    async membersLogin(login, passwordHash){
+      return callStorageApi('membersLogin', { login, passwordHash });
     },
     async membersUpdate(patch){
       return callStorageApi('membersUpdate', patch || {});
@@ -3840,11 +3848,12 @@ async function fillRememberedLogin(autoSubmit){
     const res = await window.storage.get(REMEMBER_KEY, false);
     if(res && res.value){
       const saved = JSON.parse(res.value);
-      document.getElementById('loginEmail').value = saved.email || '';
+      const login = saved.login || saved.email || ''; // saved.email: 이전 버전(이메일 로그인) 호환
+      document.getElementById('loginUsername').value = login;
       document.getElementById('loginPassword').value = saved.password || '';
       document.getElementById('rememberPassword').checked = true;
-      if(autoSubmit && saved.email && saved.password){
-        performLogin(saved.email, saved.password);
+      if(autoSubmit && login && saved.password){
+        performLogin(login, saved.password);
       }
     }
   }catch(e){
@@ -3866,7 +3875,7 @@ function resetGateForm(){
   document.getElementById('openMyPageLink').style.display = 'none';
   document.getElementById('logoutLink').style.display = 'none';
   document.getElementById('withdrawLink').style.display = 'none';
-  ['signupName','signupEmail','signupPassword','signupPasswordConfirm','loginEmail','loginPassword'].forEach(id=>{
+  ['signupName','signupUsername','signupEmail','signupPassword','signupPasswordConfirm','loginUsername','loginPassword'].forEach(id=>{
     document.getElementById(id).value = '';
   });
   document.getElementById('gateLoginView').style.display = 'block';
@@ -3903,6 +3912,7 @@ function formatBoardAuthorLabel(member){
 document.getElementById('openMyPageLink').addEventListener('click', (e)=>{
   e.preventDefault();
   if(!currentMember) return;
+  document.getElementById('myPageUsername').value = currentMember.username || '';
   document.getElementById('myPageEmail').value = currentMember.email || '';
   document.getElementById('myPageName').value = currentMember.name || '';
   document.getElementById('myPageNickname').value = currentMember.nickname || '';
@@ -3918,10 +3928,15 @@ document.getElementById('myPageCloseBtn').addEventListener('click', ()=>{
 document.getElementById('myPageSaveBtn').addEventListener('click', async ()=>{
   const statusEl = document.getElementById('myPageStatus');
   if(!currentMember) return;
+  const username = document.getElementById('myPageUsername').value.trim();
   const nickname = document.getElementById('myPageNickname').value.trim();
   const newPassword = document.getElementById('myPageNewPassword').value;
   const newPasswordConfirm = document.getElementById('myPageNewPasswordConfirm').value;
 
+  if(!isValidUsername(username)){
+    statusEl.textContent = '아이디는 영문/숫자/밑줄 4~20자로 입력해주세요.';
+    return;
+  }
   const reservedNicknames = ['오지선', '오이지', 'pickle'];
   if(nickname && reservedNicknames.includes(nickname.toLowerCase())){
     statusEl.textContent = '사용할 수 없는 닉네임이에요. 다른 닉네임을 입력해주세요.';
@@ -3952,7 +3967,7 @@ document.getElementById('myPageSaveBtn').addEventListener('click', async ()=>{
         return;
       }
     }
-    const setFields = { nickname };
+    const setFields = { username, nickname };
     if(newPassword){
       setFields.passwordHash = simpleHash(newPassword);
     }
@@ -3964,7 +3979,7 @@ document.getElementById('myPageSaveBtn').addEventListener('click', async ()=>{
     statusEl.textContent = '저장되었어요.';
     setTimeout(()=>{ statusEl.textContent=''; }, 2500);
   }catch(e){
-    statusEl.textContent = '저장에 실패했어요. 잠시 후 다시 시도해주세요.';
+    statusEl.textContent = e.message || '저장에 실패했어요. 잠시 후 다시 시도해주세요.';
   }
 });
 
@@ -4009,6 +4024,10 @@ document.querySelectorAll('.pw-toggle-btn').forEach(btn=>{
 
 function isValidEmail(email){
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function isValidUsername(username){
+  return /^[a-zA-Z0-9_]{4,20}$/.test(username);
 }
 
 // ---- 가입/로그인 화면 전환 ----
@@ -4084,7 +4103,7 @@ document.getElementById('forgotResetBtn').addEventListener('click', async ()=>{
     await window.storage.membersForgotReset(forgotMemberId, simpleHash(newPassword));
 
     document.getElementById('forgotPasswordBox').style.display = 'none';
-    document.getElementById('loginEmail').value = document.getElementById('forgotEmail').value.trim();
+    document.getElementById('loginUsername').value = document.getElementById('forgotEmail').value.trim();
     document.getElementById('loginPassword').value = '';
     document.getElementById('loginStatus').textContent = '패스워드가 변경되었어요. 새 패스워드로 로그인해주세요.';
     forgotMemberId = null;
@@ -4095,19 +4114,21 @@ document.getElementById('forgotResetBtn').addEventListener('click', async ()=>{
 
 document.getElementById('signupSubmitBtn').addEventListener('click', async ()=>{
   const name = document.getElementById('signupName').value.trim();
+  const username = document.getElementById('signupUsername').value.trim();
   const email = document.getElementById('signupEmail').value.trim();
   const password = document.getElementById('signupPassword').value;
   const passwordConfirm = document.getElementById('signupPasswordConfirm').value;
   const statusEl = document.getElementById('signupStatus');
 
   if(!name){ statusEl.textContent = '이름을 입력해주세요.'; return; }
+  if(!isValidUsername(username)){ statusEl.textContent = '아이디는 영문/숫자/밑줄 4~20자로 입력해주세요.'; return; }
   if(!isValidEmail(email)){ statusEl.textContent = '올바른 이메일 형식으로 입력해주세요.'; return; }
   if(password.length < 4){ statusEl.textContent = '비밀번호는 4자 이상 입력해주세요.'; return; }
   if(password !== passwordConfirm){ statusEl.textContent = '비밀번호가 일치하지 않습니다.'; return; }
 
   statusEl.textContent = '가입 처리 중...';
   try{
-    const result = await window.storage.membersSignup(name, email, simpleHash(password));
+    const result = await window.storage.membersSignup(name, email, username, simpleHash(password));
     const member = result.member;
     window.storage.setSession(member.id, result.token);
     await window.storage.set(SESSION_KEY, JSON.stringify({ id: member.id, token: result.token }), false);
@@ -4122,21 +4143,21 @@ document.getElementById('signupSubmitBtn').addEventListener('click', async ()=>{
   }
 });
 
-async function performLogin(email, password){
+async function performLogin(login, password){
   const statusEl = document.getElementById('loginStatus');
-  if(!isValidEmail(email) || !password){
-    statusEl.textContent = '이메일과 비밀번호를 입력해주세요.';
+  if(!login || !password){
+    statusEl.textContent = '아이디와 비밀번호를 입력해주세요.';
     return;
   }
   statusEl.textContent = '로그인 중...';
   try{
-    const result = await window.storage.membersLogin(email, simpleHash(password));
+    const result = await window.storage.membersLogin(login, simpleHash(password));
     const member = result.member;
     window.storage.setSession(member.id, result.token);
     await window.storage.set(SESSION_KEY, JSON.stringify({ id: member.id, token: result.token }), false);
 
     if(document.getElementById('rememberPassword').checked){
-      await window.storage.set(REMEMBER_KEY, JSON.stringify({ email, password }), false);
+      await window.storage.set(REMEMBER_KEY, JSON.stringify({ login, password }), false);
     }else{
       try{ await window.storage.delete(REMEMBER_KEY, false); }catch(err){ /* nothing to clear */ }
     }
@@ -4152,9 +4173,9 @@ async function performLogin(email, password){
 }
 
 document.getElementById('loginSubmitBtn').addEventListener('click', ()=>{
-  const email = document.getElementById('loginEmail').value.trim();
+  const login = document.getElementById('loginUsername').value.trim();
   const password = document.getElementById('loginPassword').value;
-  performLogin(email, password);
+  performLogin(login, password);
 });
 
 // ---- 관리자 패널 ----

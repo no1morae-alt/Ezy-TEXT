@@ -145,18 +145,25 @@ export async function onRequestPost(context){
   }
 
   if(action === 'membersSignup'){
-    const { name, email, passwordHash } = body;
-    if(!name || !email || !passwordHash){
-      return json({ error: '이름/이메일/비밀번호가 필요합니다.' }, 400);
+    const { name, email, username, passwordHash } = body;
+    if(!name || !email || !username || !passwordHash){
+      return json({ error: '이름/아이디/이메일/비밀번호가 필요합니다.' }, 400);
+    }
+    if(!/^[a-zA-Z0-9_]{4,20}$/.test(username)){
+      return json({ error: '아이디는 영문/숫자/밑줄 4~20자로 입력해주세요.' }, 400);
     }
     const members = await loadRawMembers(env);
-    const existing = members.find(m => m.email.toLowerCase() === email.toLowerCase() && !m.withdrawnAt);
-    if(existing){
+    const existingEmail = members.find(m => m.email.toLowerCase() === email.toLowerCase() && !m.withdrawnAt);
+    if(existingEmail){
       return json({ error: '이미 가입된 이메일이에요. 로그인을 이용해주세요.' }, 409);
+    }
+    const existingUsername = members.find(m => (m.username || '').toLowerCase() === username.toLowerCase() && !m.withdrawnAt);
+    if(existingUsername){
+      return json({ error: '이미 사용 중인 아이디예요. 다른 아이디를 입력해주세요.' }, 409);
     }
     const now = new Date().toISOString();
     const member = {
-      id: crypto.randomUUID(), name, email, passwordHash,
+      id: crypto.randomUUID(), name, email, username, passwordHash,
       registeredAt: now, lastAccessAt: now, lastActiveAt: now, visitCount: 1, withdrawnAt: null
     };
     members.push(member);
@@ -166,14 +173,18 @@ export async function onRequestPost(context){
   }
 
   if(action === 'membersLogin'){
-    const { email, passwordHash } = body;
-    if(!email || !passwordHash){
-      return json({ error: '이메일/비밀번호가 필요합니다.' }, 400);
+    // login은 아이디(username) 또는, 아직 아이디를 설정하지 않은 기존 회원을 위해 이메일도 허용해요.
+    const { login, passwordHash } = body;
+    if(!login || !passwordHash){
+      return json({ error: '아이디/비밀번호가 필요합니다.' }, 400);
     }
     const members = await loadRawMembers(env);
-    const member = members.find(m => m.email.toLowerCase() === email.toLowerCase());
+    const loginLower = login.toLowerCase();
+    const member = members.find(m =>
+      (m.username && m.username.toLowerCase() === loginLower) || m.email.toLowerCase() === loginLower
+    );
     if(!member || member.withdrawnAt || member.passwordHash !== passwordHash){
-      return json({ error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
+      return json({ error: '아이디 또는 비밀번호가 올바르지 않습니다.' }, 401);
     }
     member.visitCount = (member.visitCount || 1) + 1;
     member.lastAccessAt = new Date().toISOString();
@@ -212,7 +223,19 @@ export async function onRequestPost(context){
     }
     const { set: setFields, increment: incFields } = body;
     if(setFields && typeof setFields === 'object'){
-      for(const k of ['nickname', 'passwordHash', 'withdrawnAt', 'lastActiveAt', 'lastAccessAt']){
+      if('username' in setFields){
+        const newUsername = setFields.username;
+        if(!/^[a-zA-Z0-9_]{4,20}$/.test(newUsername)){
+          return json({ error: '아이디는 영문/숫자/밑줄 4~20자로 입력해주세요.' }, 400);
+        }
+        const taken = members.some(m =>
+          m.id !== verifiedId && !m.withdrawnAt && (m.username || '').toLowerCase() === newUsername.toLowerCase()
+        );
+        if(taken){
+          return json({ error: '이미 사용 중인 아이디예요. 다른 아이디를 입력해주세요.' }, 409);
+        }
+      }
+      for(const k of ['nickname', 'username', 'passwordHash', 'withdrawnAt', 'lastActiveAt', 'lastAccessAt']){
         if(k in setFields) members[idx][k] = setFields[k];
       }
     }
