@@ -1487,6 +1487,8 @@ function setGateVisible(visible){
   }
   const deviceId = getDeviceId();
   let currentMemberId = null;
+  let currentSessionToken = null;
+  let currentAdminToken = null;
 
   let bannerShown = false;
   function showStorageErrorBanner(message){
@@ -1505,7 +1507,7 @@ function setGateVisible(visible){
       res = await fetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({ action, deviceId, memberId: currentMemberId }, params))
+        body: JSON.stringify(Object.assign({ action, deviceId, memberId: currentMemberId, sessionToken: currentSessionToken, adminToken: currentAdminToken }, params))
       });
     }catch(networkErr){
       showStorageErrorBanner('/api/storage에 접속할 수 없어요 (네트워크 오류). Cloudflare Pages Functions가 배포됐는지 확인해주세요.');
@@ -1527,6 +1529,10 @@ function setGateVisible(visible){
 
   window.storage = {
     setMemberId(id){ currentMemberId = id || null; },
+    // 로그인/가입/세션 복원 시 memberId와 함께 서버가 서명한 세션 토큰을 같이 저장해요.
+    // 이후의 모든 /api/storage 요청에 이 토큰이 자동으로 실려서, 서버가 "이 요청이 정말 그
+    // memberId 본인 것인지" 검증할 수 있게 돼요 (memberId만 보내는 건 아무나 흉내낼 수 있어서 안전하지 않아요).
+    setSession(id, token){ currentMemberId = id || null; currentSessionToken = token || null; },
     async get(key, shared){
       const result = await callStorageApi('get', { key, shared: !!shared });
       if(result.value === null || result.value === undefined) return null;
@@ -1543,6 +1549,33 @@ function setGateVisible(visible){
     async list(prefix, shared){
       const result = await callStorageApi('list', { prefix: prefix || '', shared: !!shared });
       return { keys: result.keys || [] };
+    },
+    // ---- 회원 목록 전용 (비밀번호 해시가 클라이언트로 내려오지 않아요) ----
+    async membersGet(){
+      const result = await callStorageApi('membersGet', {});
+      return result.members || [];
+    },
+    async membersSignup(name, email, passwordHash){
+      return callStorageApi('membersSignup', { name, email, passwordHash });
+    },
+    async membersLogin(email, passwordHash){
+      return callStorageApi('membersLogin', { email, passwordHash });
+    },
+    async membersUpdate(patch){
+      return callStorageApi('membersUpdate', patch || {});
+    },
+    async membersForgotReset(targetMemberId, passwordHash){
+      return callStorageApi('membersForgotReset', { targetMemberId, passwordHash });
+    },
+    // ---- 관리자 전용 ----
+    async adminLogin(password){
+      const result = await callStorageApi('adminLogin', { password });
+      currentAdminToken = result.token || null;
+      return result;
+    },
+    clearAdminToken(){ currentAdminToken = null; },
+    async membersAdminDelete(targetMemberId){
+      return callStorageApi('membersAdminDelete', { targetMemberId });
     }
   };
 })();
@@ -3689,11 +3722,9 @@ document.getElementById('resetDocsBtn').addEventListener('click', ()=>{
 })();
 
 // ---- 회원가입 / 로그인 게이트 ----
-const MEMBERS_KEY = 'signup-members-v1';
 const SESSION_KEY = 'my-session-v1'; // 개인 저장소: 이 브라우저가 어떤 회원으로 로그인했는지만 저장
 const REMEMBER_KEY = 'remembered-login-v1'; // 개인 저장소: 로그인 화면에 미리 채워둘 아이디/패스워드
 let currentMember = null; // 현재 로그인한 회원 정보 (게시판 글쓰기 등에 사용)
-const ADMIN_PASSWORD = 'oiji2026'; // 관리자 비밀번호 (필요 시 이 값을 바꿔서 재배포하면 돼요)
 const HEARTBEAT_MS = 90000; // 90초마다 접속중 상태 갱신
 const ONLINE_THRESHOLD_MS = 2 * 60 * 1000; // 최근 2분 이내 접속이면 '접속중'으로 표시
 
@@ -3708,15 +3739,12 @@ function simpleHash(str){
   return 'h' + Math.abs(hash).toString(36);
 }
 
+// 비밀번호 해시가 제거된 안전한 회원 목록만 받아와요 (functions/api/storage.js의 membersGet 액션).
 async function getMembers(){
   try{
-    const res = await window.storage.get(MEMBERS_KEY, true);
-    if(res && res.value) return JSON.parse(res.value);
+    return await window.storage.membersGet();
   }catch(e){ /* none yet */ }
   return [];
-}
-async function saveMembers(members){
-  await window.storage.set(MEMBERS_KEY, JSON.stringify(members), true);
 }
 
 let heartbeatTimer = null;
@@ -3728,15 +3756,12 @@ function startHeartbeat(memberId){
       const now = Date.now();
       const elapsed = isFirst ? 0 : (now - lastBeatAt);
       lastBeatAt = now;
-      const members = await getMembers();
-      const idx = members.findIndex(m=>m.id === memberId);
-      if(idx > -1){
-        members[idx].lastActiveAt = new Date().toISOString();
-        // 체류시간은 실제 열려있던 시간만 더하되, 딴 데 갔다 온 경우를 대비해 한 번에 너무 크게 튀지 않도록 상한을 둬요
-        const cappedElapsed = Math.min(elapsed, HEARTBEAT_MS * 3);
-        members[idx].totalActiveMs = (members[idx].totalActiveMs || 0) + cappedElapsed;
-        await saveMembers(members);
-      }
+      // 체류시간은 실제 열려있던 시간만 더하되, 딴 데 갔다 온 경우를 대비해 한 번에 너무 크게 튀지 않도록 상한을 둬요
+      const cappedElapsed = Math.min(elapsed, HEARTBEAT_MS * 3);
+      await window.storage.membersUpdate({
+        set: { lastActiveAt: new Date().toISOString() },
+        increment: { totalActiveMs: cappedElapsed }
+      });
     }catch(e){ /* best effort */ }
   };
   beat(true);
@@ -3771,22 +3796,34 @@ async function checkSignupGate(){
     const res = await window.storage.get(SESSION_KEY, false);
     if(res && res.value){
       const session = JSON.parse(res.value);
+      window.storage.setSession(session.id, session.token);
       const members = await getMembers();
       const member = members.find(m=>m.id === session.id);
       if(member && !member.withdrawnAt){
+        let updatedMember = member;
+        try{
+          const updated = await window.storage.membersUpdate({
+            set: { lastAccessAt: new Date().toISOString(), lastActiveAt: new Date().toISOString() },
+            increment: { visitCount: 1 }
+          });
+          updatedMember = updated.member || member;
+        }catch(tokenErr){
+          // 예전 형식 세션(토큰 없음)이라 갱신이 거부된 경우 - 다시 로그인하도록 안내해요.
+          window.storage.setSession(null, null);
+          await window.storage.delete(SESSION_KEY, false);
+          setGateVisible(true);
+          fillRememberedLogin();
+          return;
+        }
         setGateVisible(false);
-        showLoggedInState(member.name);
-        member.visitCount = (member.visitCount || 1) + 1;
-        member.lastAccessAt = new Date().toISOString();
-        member.lastActiveAt = member.lastAccessAt;
-        await saveMembers(members);
-        startHeartbeat(member.id);
-        currentMember = member;
-        window.storage.setMemberId(member.id);
+        showLoggedInState(updatedMember.name);
+        startHeartbeat(updatedMember.id);
+        currentMember = updatedMember;
         await reloadPersonalDataForMember();
         return;
       }
       // session invalid (withdrawn or missing) - clear it and fall through to gate
+      window.storage.setSession(null, null);
       await window.storage.delete(SESSION_KEY, false);
     }
   }catch(e){
@@ -3845,7 +3882,7 @@ document.getElementById('logoutLink').addEventListener('click', async (e)=>{
     await window.storage.delete(SESSION_KEY, false);
   }catch(err){ /* ignore */ }
   currentMember = null;
-  window.storage.setMemberId(null);
+  window.storage.setSession(null, null);
   resetPersonalDataToDefaults();
   resetGateForm();
 });
@@ -3903,13 +3940,8 @@ document.getElementById('myPageSaveBtn').addEventListener('click', async ()=>{
 
   statusEl.textContent = '저장 중...';
   try{
-    const members = await getMembers();
-    const idx = members.findIndex(m=>m.id === currentMember.id);
-    if(idx === -1){
-      statusEl.textContent = '회원 정보를 찾을 수 없어요.';
-      return;
-    }
     if(nickname){
+      const members = await getMembers();
       const taken = members.some(m=>
         m.id !== currentMember.id &&
         !m.withdrawnAt &&
@@ -3920,12 +3952,12 @@ document.getElementById('myPageSaveBtn').addEventListener('click', async ()=>{
         return;
       }
     }
-    members[idx].nickname = nickname;
+    const setFields = { nickname };
     if(newPassword){
-      members[idx].passwordHash = simpleHash(newPassword);
+      setFields.passwordHash = simpleHash(newPassword);
     }
-    await saveMembers(members);
-    currentMember = members[idx];
+    const result = await window.storage.membersUpdate({ set: setFields });
+    currentMember = result.member;
     showLoggedInState(currentMember.name);
     document.getElementById('myPageNewPassword').value = '';
     document.getElementById('myPageNewPasswordConfirm').value = '';
@@ -3951,18 +3983,10 @@ document.getElementById('withdrawLink').addEventListener('click', async (e)=>{
     return;
   }
   try{
-    const res = await window.storage.get(SESSION_KEY, false);
-    if(res && res.value){
-      const session = JSON.parse(res.value);
-      const members = await getMembers();
-      const idx = members.findIndex(m=>m.id === session.id);
-      if(idx > -1){
-        members[idx].withdrawnAt = new Date().toISOString();
-        await saveMembers(members);
-      }
-    }
+    await window.storage.membersUpdate({ set: { withdrawnAt: new Date().toISOString() } });
     await window.storage.delete(SESSION_KEY, false);
     await window.storage.delete(REMEMBER_KEY, false);
+    window.storage.setSession(null, null);
     currentMember = null;
   }catch(err){ /* best effort */ }
   document.getElementById('myPageModal').style.display = 'none';
@@ -4057,17 +4081,10 @@ document.getElementById('forgotResetBtn').addEventListener('click', async ()=>{
   }
   statusEl.textContent = '변경 중...';
   try{
-    const members = await getMembers();
-    const idx = members.findIndex(m=>m.id === forgotMemberId);
-    if(idx === -1){
-      statusEl.textContent = '회원 정보를 찾을 수 없어요. 처음부터 다시 시도해주세요.';
-      return;
-    }
-    members[idx].passwordHash = simpleHash(newPassword);
-    await saveMembers(members);
+    await window.storage.membersForgotReset(forgotMemberId, simpleHash(newPassword));
 
     document.getElementById('forgotPasswordBox').style.display = 'none';
-    document.getElementById('loginEmail').value = members[idx].email;
+    document.getElementById('loginEmail').value = document.getElementById('forgotEmail').value.trim();
     document.getElementById('loginPassword').value = '';
     document.getElementById('loginStatus').textContent = '패스워드가 변경되었어요. 새 패스워드로 로그인해주세요.';
     forgotMemberId = null;
@@ -4090,29 +4107,18 @@ document.getElementById('signupSubmitBtn').addEventListener('click', async ()=>{
 
   statusEl.textContent = '가입 처리 중...';
   try{
-    const members = await getMembers();
-    const existing = members.find(m=>m.email.toLowerCase() === email.toLowerCase() && !m.withdrawnAt);
-    if(existing){
-      statusEl.textContent = '이미 가입된 이메일이에요. 로그인을 이용해주세요.';
-      return;
-    }
-    const now = new Date().toISOString();
-    const member = {
-      id: uid(), name, email, passwordHash: simpleHash(password),
-      registeredAt: now, lastAccessAt: now, lastActiveAt: now, visitCount: 1, withdrawnAt: null
-    };
-    members.push(member);
-    await saveMembers(members);
-    await window.storage.set(SESSION_KEY, JSON.stringify({ id: member.id }), false);
+    const result = await window.storage.membersSignup(name, email, simpleHash(password));
+    const member = result.member;
+    window.storage.setSession(member.id, result.token);
+    await window.storage.set(SESSION_KEY, JSON.stringify({ id: member.id, token: result.token }), false);
 
     setGateVisible(false);
     showLoggedInState(name);
     startHeartbeat(member.id);
     currentMember = member;
-    window.storage.setMemberId(member.id);
     await reloadPersonalDataForMember();
   }catch(e){
-    statusEl.textContent = '가입 처리에 실패했어요. 잠시 후 다시 시도해주세요.';
+    statusEl.textContent = e.message || '가입 처리에 실패했어요. 잠시 후 다시 시도해주세요.';
   }
 });
 
@@ -4124,22 +4130,10 @@ async function performLogin(email, password){
   }
   statusEl.textContent = '로그인 중...';
   try{
-    const members = await getMembers();
-    const member = members.find(m=>m.email.toLowerCase() === email.toLowerCase() && !m.withdrawnAt)
-      || members.find(m=>m.email.toLowerCase() === email.toLowerCase());
-    if(!member || member.withdrawnAt){
-      statusEl.textContent = '가입되지 않은 이메일이거나 탈퇴한 계정이에요.';
-      return;
-    }
-    if(member.passwordHash !== simpleHash(password)){
-      statusEl.textContent = '비밀번호가 올바르지 않습니다.';
-      return;
-    }
-    member.visitCount = (member.visitCount || 1) + 1;
-    member.lastAccessAt = new Date().toISOString();
-    member.lastActiveAt = member.lastAccessAt;
-    await saveMembers(members);
-    await window.storage.set(SESSION_KEY, JSON.stringify({ id: member.id }), false);
+    const result = await window.storage.membersLogin(email, simpleHash(password));
+    const member = result.member;
+    window.storage.setSession(member.id, result.token);
+    await window.storage.set(SESSION_KEY, JSON.stringify({ id: member.id, token: result.token }), false);
 
     if(document.getElementById('rememberPassword').checked){
       await window.storage.set(REMEMBER_KEY, JSON.stringify({ email, password }), false);
@@ -4151,10 +4145,9 @@ async function performLogin(email, password){
     showLoggedInState(member.name);
     startHeartbeat(member.id);
     currentMember = member;
-    window.storage.setMemberId(member.id);
     await reloadPersonalDataForMember();
   }catch(e){
-    statusEl.textContent = '로그인에 실패했어요. 잠시 후 다시 시도해주세요.';
+    statusEl.textContent = e.message || '로그인에 실패했어요. 잠시 후 다시 시도해주세요.';
   }
 }
 
@@ -4174,16 +4167,17 @@ document.getElementById('gateAdminLoginLink').addEventListener('click', (e)=>{
   box.style.display = box.style.display === 'none' ? 'block' : 'none';
 });
 
-document.getElementById('gateAdminLoginBtn').addEventListener('click', ()=>{
+document.getElementById('gateAdminLoginBtn').addEventListener('click', async ()=>{
   const input = document.getElementById('gateAdminPassInput').value;
   const statusEl = document.getElementById('gateAdminStatus');
-  if(input === ADMIN_PASSWORD){
+  try{
+    await window.storage.adminLogin(input);
     adminAuthed = true;
     cameFromGateAdmin = true;
     setGateVisible(false);
     openAdminDashboard();
-  }else{
-    statusEl.textContent = '비밀번호가 올바르지 않습니다.';
+  }catch(e){
+    statusEl.textContent = e.message || '비밀번호가 올바르지 않습니다.';
   }
 });
 
@@ -4206,24 +4200,26 @@ function openAdminDashboard(){
 
 document.getElementById('adminDashboardExitBtn').addEventListener('click', ()=>{
   document.getElementById('adminDashboard').style.display = 'none';
+  adminAuthed = false;
+  window.storage.clearAdminToken();
   if(cameFromGateAdmin){
-    adminAuthed = false;
     setGateVisible(true);
   }else{
     document.getElementById('mainApp').style.display = 'block';
   }
 });
 
-document.getElementById('adminAuthBtn').addEventListener('click', ()=>{
+document.getElementById('adminAuthBtn').addEventListener('click', async ()=>{
   const input = document.getElementById('adminPassInput').value;
   const statusEl = document.getElementById('adminAuthStatus');
-  if(input === ADMIN_PASSWORD){
+  try{
+    await window.storage.adminLogin(input);
     adminAuthed = true;
     document.getElementById('adminPassInput').value = '';
     statusEl.textContent = '';
     showAdminStatsView();
-  }else{
-    statusEl.textContent = '비밀번호가 올바르지 않습니다.';
+  }catch(e){
+    statusEl.textContent = e.message || '비밀번호가 올바르지 않습니다.';
   }
 });
 
@@ -4283,8 +4279,7 @@ async function showAdminStatsView(){
 
   let members = [];
   try{
-    const res = await window.storage.get(MEMBERS_KEY, true);
-    if(res && res.value) members = JSON.parse(res.value);
+    members = await getMembers();
   }catch(e){
     members = [];
   }
@@ -4326,9 +4321,8 @@ async function showAdminStatsView(){
   });
   container.querySelectorAll('[data-remove-member]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
-      members = members.filter(m=>m.id !== btn.dataset.removeMember);
       try{
-        await window.storage.set(MEMBERS_KEY, JSON.stringify(members), true);
+        await window.storage.membersAdminDelete(btn.dataset.removeMember);
       }catch(e){
         // best effort
       }
