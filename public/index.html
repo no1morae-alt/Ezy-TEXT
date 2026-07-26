@@ -3322,6 +3322,16 @@ function formatDraftDateTime(iso){
   return `${d.getFullYear()}.${d.getMonth()+1}.${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
+function panelHasContent(panelId){
+  const data = collectPanelDraft(panelId);
+  return Object.keys(data).some(k=>{
+    if(k.startsWith('__')) return false;
+    const v = data[k];
+    if(typeof v === 'boolean') return false;
+    return String(v||'').trim() !== '';
+  });
+}
+
 function upsertDraftById(panelType, recordId, data, now){
   if(!recordId) return;
   const list = panelType === 'compose' ? composeDrafts : docsDrafts;
@@ -3345,13 +3355,13 @@ async function persistDrafts(){
 async function saveDraft(){
   const now = new Date().toISOString();
 
-  if(document.getElementById('instructorName').value.trim()){
+  if(panelHasContent('panel-compose')){
     await saveComposeOutreachFromDOM();
     if(loadedComposeRecord){
       upsertDraftById('compose', loadedComposeRecord.id, collectPanelDraft('panel-compose'), now);
     }
   }
-  if(document.getElementById('docsInstructorName').value.trim()){
+  if(panelHasContent('panel-docs')){
     await saveDocsOutreachFromDOM();
     if(loadedDocsRecord){
       upsertDraftById('docs', loadedDocsRecord.id, collectPanelDraft('panel-docs'), now);
